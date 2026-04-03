@@ -18,6 +18,75 @@ function M.status()
   return ""
 end
 
+--- 從檔案路徑推算 FQCN
+function M.filepath_to_fqcn(filepath)
+  filepath = filepath or vim.fn.expand("%:p")
+  local markers = { "src/main/java/", "src/test/java/", "src/" }
+  for _, marker in ipairs(markers) do
+    local idx = filepath:find(marker, 1, true)
+    if idx then
+      local relative = filepath:sub(idx + #marker)
+      return relative:gsub("%.java$", ""):gsub("/", ".")
+    end
+  end
+  -- fallback: 檔名（single file）
+  return vim.fn.expand("%:t:r")
+end
+
+--- mainClass 記錄檔路徑
+local function main_class_store_path()
+  return vim.fn.getcwd() .. "/.vim-java-debugger/main_class"
+end
+
+--- 讀取上次的 mainClass
+function M.load_main_class()
+  local path = main_class_store_path()
+  local f = io.open(path, "r")
+  if not f then return nil end
+  local content = f:read("*a")
+  f:close()
+  content = content:gsub("%s+", "")
+  return content ~= "" and content or nil
+end
+
+--- 儲存 mainClass
+function M.save_main_class(fqcn)
+  local dir = vim.fn.getcwd() .. "/.vim-java-debugger"
+  if vim.fn.isdirectory(dir) == 0 then
+    vim.fn.mkdir(dir, "p")
+  end
+  local f = io.open(main_class_store_path(), "w")
+  if f then
+    f:write(fqcn)
+    f:close()
+  end
+end
+
+--- 決定 mainClass：上次記錄 > 當前檔案 FQCN
+function M.resolve_main_class()
+  local saved = M.load_main_class()
+  if saved then
+    return saved
+  end
+  local fqcn = M.filepath_to_fqcn()
+  M.save_main_class(fqcn)
+  return fqcn
+end
+
+--- 讓使用者手動重新選擇 mainClass
+function M.select_main_class()
+  local current_fqcn = M.filepath_to_fqcn()
+  vim.ui.input({
+    prompt = "Main class: ",
+    default = current_fqcn,
+  }, function(input)
+    if input and input ~= "" then
+      M.save_main_class(input)
+      vim.notify("Main class set to: " .. input, vim.log.levels.INFO)
+    end
+  end)
+end
+
 function M.get_adapter_jar()
   if M.opts.adapter_jar then
     return M.opts.adapter_jar
@@ -57,6 +126,7 @@ function M.setup_keymaps()
   map("n", prefix .. "p", function() require("dap").pause() end, { desc = "Pause" })
   map("n", prefix .. "r", function() require("dap").repl.open() end, { desc = "Open REPL" })
   map("n", prefix .. "q", function() require("dap").terminate() end, { desc = "Terminate debug" })
+  map("n", prefix .. "m", function() M.select_main_class() end, { desc = "Set main class" })
 
   -- Debug mode: debug session 啟動時綁定簡單按鍵，結束時還原
   M.setup_debug_mode_keymaps()

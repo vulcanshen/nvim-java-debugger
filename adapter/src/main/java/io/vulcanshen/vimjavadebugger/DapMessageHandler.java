@@ -171,6 +171,7 @@ public class DapMessageHandler {
             debugger.disconnect();
         }
         server.sendResponse(request, null);
+        System.exit(0);
     }
 
     private void handleConfigurationDone(JsonObject request) {

@@ -26,9 +26,7 @@ function M.setup(opts)
         return vim.fn.getcwd()
       end,
       mainClass = function()
-        -- 從當前檔案名推斷 class name
-        local file = vim.fn.expand("%:t:r")
-        return file
+        return config.resolve_main_class()
       end,
     },
   }

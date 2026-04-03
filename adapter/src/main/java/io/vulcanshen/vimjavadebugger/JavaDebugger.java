@@ -40,12 +40,19 @@ public class JavaDebugger {
     }
 
     public void launch(String mainClass) throws Exception {
-        int port = 5005;
+        int port = findFreePort();
+        System.err.println("Using debug port: " + port);
 
         targetProcess = startTargetJvm(mainClass, port);
-        vm = attachToJvm(port);
         startOutputForwarding();
+        vm = attachToJvm(port);
         startEventLoop();
+    }
+
+    private int findFreePort() throws Exception {
+        try (java.net.ServerSocket socket = new java.net.ServerSocket(0)) {
+            return socket.getLocalPort();
+        }
     }
 
     private Process startTargetJvm(String mainClass, int port) throws Exception {
@@ -54,15 +61,47 @@ public class JavaDebugger {
         ProcessBuilder pb;
 
         switch (projectType) {
-            case MAVEN:
-                pb = new ProcessBuilder(
-                    getMavenCommand(), "exec:java",
-                    "-Dexec.mainClass=" + mainClass,
-                    "-Dexec.args=",
-                    "-Dmaven.compiler.fork=true",
-                    "-Dmaven.compiler.jvmArgs=" + debugArgs
-                );
+            case MAVEN: {
+                String mvnCmd = getMavenCommand();
+
+                // 1. mvn compile
+                System.err.println("Maven: compiling...");
+                Process compile = new ProcessBuilder(mvnCmd, "compile", "-q")
+                    .directory(new File(projectRoot))
+                    .redirectErrorStream(true)
+                    .start();
+                String compileOutput = new String(compile.getInputStream().readAllBytes());
+                int compileExitCode = compile.waitFor();
+                if (compileExitCode != 0) {
+                    throw new RuntimeException("Maven compile failed:\n" + compileOutput);
+                }
+
+                // 2. mvn dependency:build-classpath 取得 dependency classpath
+                System.err.println("Maven: resolving dependencies...");
+                Process cpProc = new ProcessBuilder(mvnCmd, "dependency:build-classpath",
+                        "-Dmdep.outputFile=/dev/stdout", "-q")
+                    .directory(new File(projectRoot))
+                    .start();
+                String depClasspath = new String(cpProc.getInputStream().readAllBytes()).trim();
+                cpProc.waitFor();
+
+                // 組合 classpath: target/classes + dependencies
+                String targetClasses = new File(projectRoot, "target/classes").getAbsolutePath();
+                String fullClasspath = targetClasses;
+                if (!depClasspath.isEmpty()) {
+                    fullClasspath = targetClasses + File.pathSeparator + depClasspath;
+                }
+
+                // 3. java -cp 啟動
+                if (mainClass == null || mainClass.isEmpty()) {
+                    throw new RuntimeException(
+                        "mainClass is required for Maven projects. "
+                        + "Open a Java file with a main method before starting the debugger.");
+                }
+                System.err.println("Launching: java " + debugArgs + " -cp ... " + mainClass);
+                pb = new ProcessBuilder("java", debugArgs, "-cp", fullClasspath, mainClass);
                 break;
+            }
             case GRADLE:
                 pb = new ProcessBuilder(
                     getGradleCommand(), "run",
@@ -111,11 +150,7 @@ public class JavaDebugger {
         }
 
         pb.directory(new File(projectRoot));
-        Process process = pb.start();
-
-        waitForDebugPort(port);
-
-        return process;
+        return pb.start();
     }
 
     private VirtualMachine attachToJvm(int port) throws Exception {
@@ -129,10 +164,23 @@ public class JavaDebugger {
         args.get("hostname").setValue("localhost");
         args.get("port").setValue(String.valueOf(port));
 
-        return connector.attach(args);
+        // 重試 JDI attach，等待目標 JVM 準備好
+        int retries = 60;
+        while (retries-- > 0) {
+            if (!targetProcess.isAlive()) {
+                throw new RuntimeException("Target process exited before debug port was ready.");
+            }
+            try {
+                return connector.attach(args);
+            } catch (Exception e) {
+                Thread.sleep(500);
+            }
+        }
+        throw new RuntimeException("Timeout waiting for JVM debug connection on port " + port);
     }
 
     private void startOutputForwarding() {
+        // stdout 轉發
         Thread outputThread = new Thread(() -> {
             try (BufferedReader br = new BufferedReader(
                     new InputStreamReader(targetProcess.getInputStream()))) {
@@ -149,6 +197,24 @@ public class JavaDebugger {
         }, "output-forwarding");
         outputThread.setDaemon(true);
         outputThread.start();
+
+        // stderr 轉發
+        Thread errorThread = new Thread(() -> {
+            try (BufferedReader br = new BufferedReader(
+                    new InputStreamReader(targetProcess.getErrorStream()))) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    JsonObject body = new JsonObject();
+                    body.addProperty("category", "stderr");
+                    body.addProperty("output", line + "\n");
+                    server.sendEvent("output", body);
+                }
+            } catch (Exception e) {
+                // process 結束時會自然中斷
+            }
+        }, "error-forwarding");
+        errorThread.setDaemon(true);
+        errorThread.start();
     }
 
     private volatile boolean terminated = false;
@@ -219,8 +285,8 @@ public class JavaDebugger {
                     lines.remove(line);
                 }
             }
-            // resume VM 讓程式繼續跑
-            cpEvent.thread().resume();
+            // resume VM 讓程式繼續跑（用 vm.resume 確保所有 thread 都恢復）
+            vm.resume();
 
         } else if (event instanceof BreakpointEvent) {
             if (terminated) return;
@@ -257,6 +323,7 @@ public class JavaDebugger {
 
         JsonArray resultBps = new JsonArray();
         List<BreakpointRequest> newBps = new ArrayList<>();
+        java.util.Set<String> prepareRequestedClasses = new java.util.HashSet<>();
 
         for (int i = 0; i < bpArray.size(); i++) {
             int line = bpArray.get(i).getAsJsonObject().get("line").getAsInt();
@@ -281,10 +348,14 @@ public class JavaDebugger {
                     pendingBreakpoints
                         .computeIfAbsent(sourcePath, k -> new HashMap<>())
                         .put(line, className);
-                    ClassPrepareRequest cpReq = vm.eventRequestManager()
-                        .createClassPrepareRequest();
-                    cpReq.addClassFilter(className);
-                    cpReq.enable();
+                    // 同一個 class 只建一個 ClassPrepareRequest
+                    if (!prepareRequestedClasses.contains(className)) {
+                        prepareRequestedClasses.add(className);
+                        ClassPrepareRequest cpReq = vm.eventRequestManager()
+                            .createClassPrepareRequest();
+                        cpReq.addClassFilter(className);
+                        cpReq.enable();
+                    }
                 }
             } catch (Exception e) {
                 System.err.println("Failed to set breakpoint: " + e.getMessage());
@@ -451,9 +522,16 @@ public class JavaDebugger {
             } catch (Exception e) {
                 // ignore
             }
+            vm = null;
         }
         if (targetProcess != null) {
             targetProcess.destroyForcibly();
+            try {
+                targetProcess.waitFor(3, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                // ignore
+            }
+            targetProcess = null;
         }
     }
 
@@ -509,22 +587,26 @@ public class JavaDebugger {
         throw new RuntimeException("No .java file found in " + projectRoot);
     }
 
-    private void waitForDebugPort(int port) throws Exception {
-        int retries = 30;
-        while (retries-- > 0) {
-            try {
-                new java.net.Socket("localhost", port).close();
-                return;
-            } catch (Exception e) {
-                Thread.sleep(500);
-            }
-        }
-        throw new RuntimeException("Timeout waiting for debug port " + port);
-    }
 
-    private String getMavenCommand() {
+    private String getMavenCommand() throws Exception {
         File wrapper = new File(projectRoot, "mvnw");
-        return wrapper.exists() ? wrapper.getAbsolutePath() : "mvn";
+        if (wrapper.exists()) {
+            return wrapper.getAbsolutePath();
+        }
+        // 檢查系統是否有 mvn
+        try {
+            Process check = new ProcessBuilder("mvn", "--version")
+                .redirectErrorStream(true).start();
+            check.getInputStream().readAllBytes();
+            check.waitFor();
+            if (check.exitValue() == 0) {
+                return "mvn";
+            }
+        } catch (Exception e) {
+            // mvn not found
+        }
+        throw new RuntimeException(
+            "Maven not found. Install Maven or add Maven Wrapper (mvnw) to your project.");
     }
 
     private String getGradleCommand() {

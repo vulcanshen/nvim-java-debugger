@@ -109,7 +109,7 @@ public class DapServer {
         sendMessage(eventObj);
     }
 
-    private void sendMessage(JsonObject message) {
+    private synchronized void sendMessage(JsonObject message) {
         try {
             String json = gson.toJson(message);
             byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
@@ -122,7 +122,13 @@ public class DapServer {
         }
     }
 
-    public static void main(String[] args) throws IOException {
-        new DapServer().start();
+    public static void main(String[] args) {
+        try {
+            new DapServer().start();
+        } catch (Exception e) {
+            // stdin 關閉或其他異常
+        }
+        // 不管怎麼結束，都乾淨退出
+        System.exit(0);
     }
 }
