@@ -132,4 +132,4 @@ vim-java-debugger/
 
 ## License
 
-MIT
+GPL-3.0
