@@ -1,0 +1,21 @@
+# Gradle
+adapter/build/
+adapter/.gradle/
+.gradle/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Plugin runtime data
+.vim-java-debugger/
+
+# Java
+*.class
+
+# Claude
+.claude/
+
+# OS
+.DS_Store
