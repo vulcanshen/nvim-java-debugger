@@ -11,9 +11,15 @@ adapter/.gradle/
 # Plugin runtime data
 .vim-java-debugger/
 
+# Downloaded adapter JAR
+adapter/libs/
+
 # Java / Maven
 *.class
 target/
+
+# Local plugin spec
+vim-java-debugger.lua
 
 # Test projects
 testground/

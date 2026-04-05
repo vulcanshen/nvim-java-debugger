@@ -38,7 +38,7 @@ return {
     "vulcanshen/vim-java-debugger",
     ft = "java",
     dependencies = { "mfussenegger/nvim-dap" },
-    build = "cd adapter && ./gradlew fatJar",
+    build = "./install.sh",
     config = function()
       require("vim-java-debugger").setup()
     end,
@@ -46,14 +46,14 @@ return {
 }
 ```
 
-### Build the adapter manually
+The `install.sh` script automatically downloads the pre-built adapter JAR from GitHub Releases. No JDK or Gradle needed for installation.
+
+### Build from source (for development)
 
 ```bash
 cd adapter
 ./gradlew build
 ```
-
-This produces the fat JAR at `adapter/build/libs/vim-java-debugger-0.1.0-all.jar`.
 
 ## Configuration
 

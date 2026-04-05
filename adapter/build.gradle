@@ -4,7 +4,21 @@ plugins {
 }
 
 group = 'io.vulcanshen.vimjavadebugger'
-version = '0.1.0'
+version = getVersionFromGit()
+
+def getVersionFromGit() {
+    try {
+        def stdout = new ByteArrayOutputStream()
+        exec {
+            commandLine 'git', 'describe', '--tags', '--always'
+            standardOutput = stdout
+            workingDir = rootProject.projectDir.parentFile
+        }
+        return stdout.toString().trim().replaceFirst('^v', '')
+    } catch (Exception e) {
+        return 'dev'
+    }
+}
 
 java {
     sourceCompatibility = JavaVersion.VERSION_11

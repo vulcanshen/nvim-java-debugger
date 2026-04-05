@@ -148,17 +148,26 @@ function M.get_adapter_jar()
   local plugin_dir = vim.fn.fnamemodify(
     debug.getinfo(1, "S").source:sub(2), ":h:h:h"
   )
-  local jar = plugin_dir .. "/adapter/build/libs/vim-java-debugger-0.1.0-all.jar"
 
-  if vim.fn.filereadable(jar) == 0 then
-    vim.notify(
-      "vim-java-debugger: adapter jar not found. Run :VimJavaDebuggerBuild first.",
-      vim.log.levels.ERROR
-    )
-    return nil
+  -- 優先用 install.sh 下載的 JAR
+  local installed_jar = plugin_dir .. "/adapter/libs/vim-java-debugger-all.jar"
+  if vim.fn.filereadable(installed_jar) == 1 then
+    return installed_jar
   end
 
-  return jar
+  -- fallback: 本地 build 的 JAR（開發用）
+  local build_dir = plugin_dir .. "/adapter/build/libs"
+  local glob = vim.fn.glob(build_dir .. "/vim-java-debugger-*-all.jar")
+  if glob ~= "" then
+    -- 取第一個匹配的（可能有版本號）
+    return vim.split(glob, "\n")[1]
+  end
+
+  vim.notify(
+    "vim-java-debugger: adapter jar not found. Run the install script or build manually.",
+    vim.log.levels.ERROR
+  )
+  return nil
 end
 
 function M.setup_keymaps()

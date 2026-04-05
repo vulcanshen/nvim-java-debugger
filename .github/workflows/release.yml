@@ -1,0 +1,37 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # git describe needs full history
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+
+      - name: Build fat JAR
+        working-directory: adapter
+        run: ./gradlew build
+
+      - name: Prepare release artifact
+        run: |
+          cp adapter/build/libs/*-all.jar vim-java-debugger-all.jar
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: vim-java-debugger-all.jar
+          generate_release_notes: true
