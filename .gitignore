@@ -15,6 +15,9 @@ adapter/.gradle/
 *.class
 target/
 
+# Test projects
+testground/
+
 # Claude
 .claude/
 

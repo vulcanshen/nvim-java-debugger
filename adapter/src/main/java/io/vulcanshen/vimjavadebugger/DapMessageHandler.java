@@ -147,21 +147,24 @@ public class DapMessageHandler {
 
     private void handleNext(JsonObject request) {
         if (debugger != null) {
-            debugger.stepOver();
+            long threadId = request.getAsJsonObject("arguments").get("threadId").getAsLong();
+            debugger.stepOver(threadId);
         }
         server.sendResponse(request, null);
     }
 
     private void handleStepIn(JsonObject request) {
         if (debugger != null) {
-            debugger.stepIn();
+            long threadId = request.getAsJsonObject("arguments").get("threadId").getAsLong();
+            debugger.stepIn(threadId);
         }
         server.sendResponse(request, null);
     }
 
     private void handleStepOut(JsonObject request) {
         if (debugger != null) {
-            debugger.stepOut();
+            long threadId = request.getAsJsonObject("arguments").get("threadId").getAsLong();
+            debugger.stepOut(threadId);
         }
         server.sendResponse(request, null);
     }

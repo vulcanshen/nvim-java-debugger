@@ -4,13 +4,14 @@ A Neovim plugin for debugging Java applications using the [Debug Adapter Protoco
 
 ## Features
 
+- **Maven / Gradle / Single-file** Java project support
 - Breakpoints with persistence across sessions
 - Step over / into / out, continue, pause
 - Variable inspection and stack traces
-- stdout forwarding to DAP console
+- stdout/stderr forwarding to DAP console
 - Debug mode keymaps (`n`/`i`/`o`/`c`/`b`/`p`/`q` during debug session)
 - which-key integration
-- Single-file Java project support (with incremental compilation)
+- Incremental compilation (single-file projects)
 - Customizable breakpoint signs
 
 ## Requirements
@@ -20,6 +21,8 @@ A Neovim plugin for debugging Java applications using the [Debug Adapter Protoco
 - [nvim-dap](https://github.com/mfussenegger/nvim-dap)
 - (Optional) [nvim-dap-ui](https://github.com/rcarriga/nvim-dap-ui) for debug panels
 - (Optional) [which-key.nvim](https://github.com/folke/which-key.nvim) for keymap hints
+- **Maven** projects: `mvnw` or system `mvn`
+- **Gradle** projects: `gradlew` or system `gradle`
 
 ## Installation
 
@@ -76,6 +79,7 @@ require("vim-java-debugger").setup({
 | `<leader>dp`   | Pause               |
 | `<leader>dr`   | Open REPL           |
 | `<leader>dq`   | Terminate debug     |
+| `<leader>dm`   | Set main class      |
 
 ### Debug mode
 
@@ -109,13 +113,36 @@ The plugin exposes a `status()` function for statusline integration:
 
 Returns `"Debugging"` when a debug session is active, empty string otherwise.
 
+## Supported Project Types
+
+### Single-file Java
+Open a `.java` file with a `main` method and press `<leader>dc`. The plugin compiles and runs it directly.
+
+### Maven
+The plugin runs `mvn compile`, resolves the classpath via `mvn dependency:build-classpath`, and launches with `java -cp`. Requires `mvnw` (Maven Wrapper) in the project or system `mvn`.
+
+### Gradle
+The plugin runs `gradle classes`, resolves the classpath via a temporary init script, and launches with `java -cp`. Requires `gradlew` (Gradle Wrapper) in the project or system `gradle`. Works with any Gradle project including Spring Boot.
+
+## Main Class Resolution
+
+When you press `<leader>dc`, the plugin determines which class to launch:
+
+1. **No saved record** — uses the current file's fully qualified class name (must have a `main` method, otherwise shows an error)
+2. **Has saved record, current file is the same** — uses it directly
+3. **Has saved record, current file is different and has `main`** — shows a selection popup (saved vs current). Your choice does **not** overwrite the saved record
+4. **Has saved record, current file has no `main`** — uses the saved record
+
+The main class is saved to `.vim-java-debugger/main_class` after a successful debug launch. Use `<leader>dm` to manually set or change it.
+
 ## How It Works
 
 1. The plugin registers a DAP adapter that launches a Java-based debug server
 2. The server communicates with Neovim via the DAP protocol over stdin/stdout
 3. The server uses Java Debug Interface (JDI) to connect to and control the target JVM
-4. For single-file projects, the source is compiled automatically (with incremental builds)
-5. Breakpoints are persisted to `.vim-java-debugger/breakpoints.json` in the project directory
+4. For Maven/Gradle projects, the plugin compiles and resolves classpath automatically
+5. For single-file projects, the source is compiled with incremental builds
+6. Breakpoints are persisted to `.vim-java-debugger/breakpoints.json` in the project directory
 
 ## Project Structure
 

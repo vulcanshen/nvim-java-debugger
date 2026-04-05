@@ -62,15 +62,68 @@ function M.save_main_class(fqcn)
   end
 end
 
---- 決定 mainClass：上次記錄 > 當前檔案 FQCN
+--- 檢查當前檔案是否有 main 方法
+function M.current_file_has_main()
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  for _, line in ipairs(lines) do
+    if line:match("public%s+static%s+void%s+main%s*%(") then
+      return true
+    end
+  end
+  return false
+end
+
+--- 決定 mainClass（透過 coroutine 支援非同步選單）
 function M.resolve_main_class()
   local saved = M.load_main_class()
-  if saved then
+  local current_fqcn = M.filepath_to_fqcn()
+  local has_main = M.current_file_has_main()
+
+  if not saved then
+    -- 沒記錄
+    if has_main then
+      M._pending_save_main_class = current_fqcn
+      return current_fqcn
+    else
+      vim.notify("Current file has no main method. Use <leader>dm to set main class.", vim.log.levels.ERROR)
+      return nil
+    end
+  end
+
+  if saved == current_fqcn then
+    -- 記錄跟當前相同
     return saved
   end
-  local fqcn = M.filepath_to_fqcn()
-  M.save_main_class(fqcn)
-  return fqcn
+
+  if has_main then
+    -- 記錄跟當前不同，當前有 main → 彈選單
+    local co = coroutine.running()
+    vim.ui.select(
+      { saved .. "  (saved)", current_fqcn .. "  (current)" },
+      { prompt = "Select main class:" },
+      function(choice)
+        local selected = nil
+        if choice then
+          selected = choice:match("^(.-)%s+%(")
+        end
+        if co then
+          coroutine.resume(co, selected or saved)
+        end
+      end
+    )
+    return coroutine.yield()
+  else
+    -- 當前沒 main，用記錄的
+    return saved
+  end
+end
+
+--- 啟動成功後儲存 mainClass（由 event_initialized listener 呼叫）
+function M.on_debug_started()
+  if M._pending_save_main_class then
+    M.save_main_class(M._pending_save_main_class)
+    M._pending_save_main_class = nil
+  end
 end
 
 --- 讓使用者手動重新選擇 mainClass
@@ -152,6 +205,9 @@ function M.setup_debug_mode_keymaps()
     if M._debug_mode_active then return end
     M._debug_mode_active = true
     M._saved_keymaps = {}
+
+    -- 啟動成功，儲存 mainClass
+    M.on_debug_started()
 
     for _, key in ipairs(debug_keys) do
       -- 儲存原本的 keymap

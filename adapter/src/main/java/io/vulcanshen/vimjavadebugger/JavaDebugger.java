@@ -12,6 +12,7 @@ import com.sun.jdi.request.StepRequest;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileWriter;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -29,6 +30,7 @@ public class JavaDebugger {
 
     private VirtualMachine vm;
     private Process targetProcess;
+    private volatile long stoppedThreadId = -1;
     private final Map<String, List<BreakpointRequest>> breakpoints = new HashMap<>();
     // 暫存尚未 verified 的斷點（class 還沒載入），等 ClassPrepareEvent 時再設
     private final Map<String, Map<Integer, String>> pendingBreakpoints = new HashMap<>();
@@ -102,12 +104,46 @@ public class JavaDebugger {
                 pb = new ProcessBuilder("java", debugArgs, "-cp", fullClasspath, mainClass);
                 break;
             }
-            case GRADLE:
-                pb = new ProcessBuilder(
-                    getGradleCommand(), "run",
-                    "--debug-jvm"
-                );
+            case GRADLE: {
+                String gradleCmd = getGradleCommand();
+
+                // 1. gradle classes
+                System.err.println("Gradle: compiling...");
+                Process compile = new ProcessBuilder(gradleCmd, "classes", "-q")
+                    .directory(new File(projectRoot))
+                    .redirectErrorStream(true)
+                    .start();
+                String compileOutput = new String(compile.getInputStream().readAllBytes());
+                int compileExitCode = compile.waitFor();
+                if (compileExitCode != 0) {
+                    throw new RuntimeException("Gradle compile failed:\n" + compileOutput);
+                }
+
+                // 2. 用 init script 取得 runtime classpath
+                System.err.println("Gradle: resolving classpath...");
+                File initScript = createGradleInitScript();
+                Process cpProc = new ProcessBuilder(gradleCmd, "-q",
+                        "--init-script", initScript.getAbsolutePath(), "printClasspath")
+                    .directory(new File(projectRoot))
+                    .start();
+                String depClasspath = new String(cpProc.getInputStream().readAllBytes()).trim();
+                cpProc.waitFor();
+                initScript.delete();
+
+                if (depClasspath.isEmpty()) {
+                    throw new RuntimeException("Failed to resolve Gradle classpath.");
+                }
+
+                // 3. java -cp 啟動
+                if (mainClass == null || mainClass.isEmpty()) {
+                    throw new RuntimeException(
+                        "mainClass is required for Gradle projects. "
+                        + "Open a Java file with a main method before starting the debugger.");
+                }
+                System.err.println("Launching: java " + debugArgs + " -cp ... " + mainClass);
+                pb = new ProcessBuilder("java", debugArgs, "-cp", depClasspath, mainClass);
                 break;
+            }
             case SINGLE_FILE:
             default:
                 String javaFile = mainClass != null ? mainClass : findMainJavaFile();
@@ -222,10 +258,12 @@ public class JavaDebugger {
     private void sendTerminated() {
         if (!terminated) {
             terminated = true;
+            disconnect();
             JsonObject exitBody = new JsonObject();
             exitBody.addProperty("exitCode", 0);
             server.sendEvent("exited", exitBody);
             server.sendEvent("terminated", null);
+            System.exit(0);
         }
     }
 
@@ -291,18 +329,20 @@ public class JavaDebugger {
         } else if (event instanceof BreakpointEvent) {
             if (terminated) return;
             BreakpointEvent bpEvent = (BreakpointEvent) event;
+            stoppedThreadId = bpEvent.thread().uniqueID();
             JsonObject body = new JsonObject();
             body.addProperty("reason", "breakpoint");
-            body.addProperty("threadId", bpEvent.thread().uniqueID());
+            body.addProperty("threadId", stoppedThreadId);
             server.sendEvent("stopped", body);
 
         } else if (event instanceof StepEvent) {
             if (terminated) return;
             StepEvent stepEvent = (StepEvent) event;
             vm.eventRequestManager().deleteEventRequest(event.request());
+            stoppedThreadId = stepEvent.thread().uniqueID();
             JsonObject body = new JsonObject();
             body.addProperty("reason", "step");
-            body.addProperty("threadId", stepEvent.thread().uniqueID());
+            body.addProperty("threadId", stoppedThreadId);
             server.sendEvent("stopped", body);
 
         } else if (event instanceof VMDeathEvent || event instanceof VMDisconnectEvent) {
@@ -448,20 +488,18 @@ public class JavaDebugger {
         JsonArray variables = new JsonArray();
 
         try {
-            for (ThreadReference thread : vm.allThreads()) {
-                if (thread.isSuspended() && thread.frameCount() > frameId) {
-                    StackFrame frame = thread.frame(frameId);
-                    List<LocalVariable> visibleVars = frame.visibleVariables();
-                    for (LocalVariable var : visibleVars) {
-                        Value value = frame.getValue(var);
-                        JsonObject v = new JsonObject();
-                        v.addProperty("name", var.name());
-                        v.addProperty("value", value != null ? value.toString() : "null");
-                        v.addProperty("type", var.typeName());
-                        v.addProperty("variablesReference", 0);
-                        variables.add(v);
-                    }
-                    break;
+            ThreadReference thread = findThread(stoppedThreadId);
+            if (thread != null && thread.isSuspended() && thread.frameCount() > frameId) {
+                StackFrame frame = thread.frame(frameId);
+                List<LocalVariable> visibleVars = frame.visibleVariables();
+                for (LocalVariable var : visibleVars) {
+                    Value value = frame.getValue(var);
+                    JsonObject v = new JsonObject();
+                    v.addProperty("name", var.name());
+                    v.addProperty("value", value != null ? value.toString() : "null");
+                    v.addProperty("type", var.typeName());
+                    v.addProperty("variablesReference", 0);
+                    variables.add(v);
                 }
             }
         } catch (Exception e) {
@@ -486,29 +524,27 @@ public class JavaDebugger {
         }
     }
 
-    public void stepOver() {
-        createStepRequest(StepRequest.STEP_OVER);
+    public void stepOver(long threadId) {
+        createStepRequest(threadId, StepRequest.STEP_OVER);
     }
 
-    public void stepIn() {
-        createStepRequest(StepRequest.STEP_INTO);
+    public void stepIn(long threadId) {
+        createStepRequest(threadId, StepRequest.STEP_INTO);
     }
 
-    public void stepOut() {
-        createStepRequest(StepRequest.STEP_OUT);
+    public void stepOut(long threadId) {
+        createStepRequest(threadId, StepRequest.STEP_OUT);
     }
 
-    private void createStepRequest(int depth) {
+    private void createStepRequest(long threadId, int depth) {
         try {
-            for (ThreadReference thread : vm.allThreads()) {
-                if (thread.isSuspended()) {
-                    StepRequest stepReq = vm.eventRequestManager()
-                        .createStepRequest(thread, StepRequest.STEP_LINE, depth);
-                    stepReq.addCountFilter(1);
-                    stepReq.enable();
-                    vm.resume();
-                    break;
-                }
+            ThreadReference thread = findThread(threadId);
+            if (thread != null && thread.isSuspended()) {
+                StepRequest stepReq = vm.eventRequestManager()
+                    .createStepRequest(thread, StepRequest.STEP_LINE, depth);
+                stepReq.addCountFilter(1);
+                stepReq.enable();
+                vm.resume();
             }
         } catch (Exception e) {
             System.err.println("Step failed: " + e.getMessage());
@@ -609,8 +645,46 @@ public class JavaDebugger {
             "Maven not found. Install Maven or add Maven Wrapper (mvnw) to your project.");
     }
 
-    private String getGradleCommand() {
+    private String getGradleCommand() throws Exception {
         File wrapper = new File(projectRoot, "gradlew");
-        return wrapper.exists() ? wrapper.getAbsolutePath() : "gradle";
+        if (wrapper.exists()) {
+            return wrapper.getAbsolutePath();
+        }
+        try {
+            Process check = new ProcessBuilder("gradle", "--version")
+                .redirectErrorStream(true).start();
+            check.getInputStream().readAllBytes();
+            check.waitFor();
+            if (check.exitValue() == 0) {
+                return "gradle";
+            }
+        } catch (Exception e) {
+            // gradle not found
+        }
+        throw new RuntimeException(
+            "Gradle not found. Install Gradle or add Gradle Wrapper (gradlew) to your project.");
+    }
+
+    private File createGradleInitScript() throws Exception {
+        File initScript = new File(projectRoot, ".vim-java-debugger/init.gradle");
+        initScript.getParentFile().mkdirs();
+        try (java.io.FileWriter fw = new java.io.FileWriter(initScript)) {
+            fw.write(
+                "allprojects {\n" +
+                "    task printClasspath {\n" +
+                "        doLast {\n" +
+                "            def cp = []\n" +
+                "            try {\n" +
+                "                cp.addAll(sourceSets.main.runtimeClasspath.files.collect { it.absolutePath })\n" +
+                "            } catch (Exception e) {\n" +
+                "                // sourceSets not available\n" +
+                "            }\n" +
+                "            println cp.join(File.pathSeparator)\n" +
+                "        }\n" +
+                "    }\n" +
+                "}\n"
+            );
+        }
+        return initScript;
     }
 }
