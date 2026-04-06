@@ -28,10 +28,10 @@ jobs:
 
       - name: Prepare release artifact
         run: |
-          cp adapter/build/libs/*-all.jar vim-java-debugger-all.jar
+          cp adapter/build/libs/*-all.jar nvim-java-debugger-all.jar
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: vim-java-debugger-all.jar
+          files: nvim-java-debugger-all.jar
           generate_release_notes: true

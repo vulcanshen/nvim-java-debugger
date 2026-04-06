@@ -158,7 +158,7 @@ public class JavaDebugger {
                 }
 
                 // 編譯到隱藏目錄，避免污染使用者的專案目錄
-                File buildDir = new File(projectRoot, ".vim-java-debugger/build");
+                File buildDir = new File(projectRoot, ".nvim-java-debugger/build");
                 buildDir.mkdirs();
 
                 String className = javaFile.replace(".java", "").replace(File.separator, ".");
@@ -666,7 +666,7 @@ public class JavaDebugger {
     }
 
     private File createGradleInitScript() throws Exception {
-        File initScript = new File(projectRoot, ".vim-java-debugger/init.gradle");
+        File initScript = new File(projectRoot, ".nvim-java-debugger/init.gradle");
         initScript.getParentFile().mkdirs();
         try (java.io.FileWriter fw = new java.io.FileWriter(initScript)) {
             fw.write(

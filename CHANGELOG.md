@@ -10,7 +10,7 @@
 - Dynamic debug port allocation (no more port 5005 conflicts)
 - stderr forwarding to DAP console
 - Main class FQCN auto-detection from file path
-- Main class persistence (.vim-java-debugger/main_class)
+- Main class persistence (.nvim-java-debugger/main_class)
 - Main class selection popup when current file differs from saved record
 - `<leader>dm` keymap to manually set main class
 - install.sh for auto-downloading adapter JAR from GitHub Releases
@@ -42,6 +42,6 @@
 - which-key integration for keymap group display
 - Customizable breakpoint signs (red dot for breakpoints, arrow for stopped line)
 - Automatic project type detection (Maven, Gradle, single file)
-- Compiled `.class` files stored in `.vim-java-debugger/build/` to avoid polluting project directory
+- Compiled `.class` files stored in `.nvim-java-debugger/build/` to avoid polluting project directory
 - `config.status()` API for statusline integration
-- Example lazy.nvim plugin spec (`vim-java-debugger.lua`)
+- Example lazy.nvim plugin spec (`nvim-java-debugger.lua`)

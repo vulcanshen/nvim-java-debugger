@@ -9,7 +9,7 @@ adapter/.gradle/
 .vscode/
 
 # Plugin runtime data
-.vim-java-debugger/
+.nvim-java-debugger/
 
 # Downloaded adapter JAR
 adapter/libs/
@@ -19,7 +19,7 @@ adapter/libs/
 target/
 
 # Local plugin spec
-vim-java-debugger.lua
+nvim-java-debugger.lua
 
 # Test projects
 testground/

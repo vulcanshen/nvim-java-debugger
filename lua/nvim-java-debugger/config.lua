@@ -35,7 +35,7 @@ end
 
 --- mainClass 記錄檔路徑
 local function main_class_store_path()
-  return vim.fn.getcwd() .. "/.vim-java-debugger/main_class"
+  return vim.fn.getcwd() .. "/.nvim-java-debugger/main_class"
 end
 
 --- 讀取上次的 mainClass
@@ -51,7 +51,7 @@ end
 
 --- 儲存 mainClass
 function M.save_main_class(fqcn)
-  local dir = vim.fn.getcwd() .. "/.vim-java-debugger"
+  local dir = vim.fn.getcwd() .. "/.nvim-java-debugger"
   if vim.fn.isdirectory(dir) == 0 then
     vim.fn.mkdir(dir, "p")
   end
@@ -150,19 +150,19 @@ function M.get_adapter_jar()
   )
 
   -- 優先用 install.sh 下載的 JAR
-  local installed_jar = plugin_dir .. "/adapter/libs/vim-java-debugger-all.jar"
+  local installed_jar = plugin_dir .. "/adapter/libs/nvim-java-debugger-all.jar"
   if vim.fn.filereadable(installed_jar) == 1 then
     return installed_jar
   end
 
   -- fallback: 本地 build 的 JAR（開發用）
-  local build_jar = plugin_dir .. "/adapter/build/libs/vim-java-debugger-all.jar"
+  local build_jar = plugin_dir .. "/adapter/build/libs/nvim-java-debugger-all.jar"
   if vim.fn.filereadable(build_jar) == 1 then
     return build_jar
   end
 
   vim.notify(
-    "vim-java-debugger: adapter jar not found. Run the install script or build manually.",
+    "nvim-java-debugger: adapter jar not found. Run the install script or build manually.",
     vim.log.levels.ERROR
   )
   return nil

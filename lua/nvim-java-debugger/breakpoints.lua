@@ -1,11 +1,11 @@
 local M = {}
 
 local function get_store_path()
-  return vim.fn.getcwd() .. "/.vim-java-debugger/breakpoints.json"
+  return vim.fn.getcwd() .. "/.nvim-java-debugger/breakpoints.json"
 end
 
 local function ensure_dir()
-  local dir = vim.fn.getcwd() .. "/.vim-java-debugger"
+  local dir = vim.fn.getcwd() .. "/.nvim-java-debugger"
   if vim.fn.isdirectory(dir) == 0 then
     vim.fn.mkdir(dir, "p")
   end
@@ -60,7 +60,7 @@ function M.save()
   end)
 
   if not ok then
-    vim.notify("vim-java-debugger: failed to save breakpoints: " .. tostring(err), vim.log.levels.WARN)
+    vim.notify("nvim-java-debugger: failed to save breakpoints: " .. tostring(err), vim.log.levels.WARN)
   end
 end
 

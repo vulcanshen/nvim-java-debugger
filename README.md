@@ -1,4 +1,4 @@
-# vim-java-debugger
+# nvim-java-debugger
 
 A Neovim plugin for debugging Java applications using the [Debug Adapter Protocol (DAP)](https://microsoft.github.io/debug-adapter-protocol/).
 
@@ -28,10 +28,10 @@ A Neovim plugin for debugging Java applications using the [Debug Adapter Protoco
 
 ### lazy.nvim
 
-Create a file at `~/.config/nvim/lua/plugins/vim-java-debugger.lua` with the following content:
+Create a file at `~/.config/nvim/lua/plugins/nvim-java-debugger.lua` with the following content:
 
 ```lua
--- ~/.config/nvim/lua/plugins/vim-java-debugger.lua
+-- ~/.config/nvim/lua/plugins/nvim-java-debugger.lua
 return {
   {
     "mfussenegger/nvim-dap",
@@ -56,12 +56,12 @@ return {
     end,
   },
   {
-    "vulcanshen/vim-java-debugger",
+    "vulcanshen/nvim-java-debugger",
     ft = "java",
     dependencies = { "mfussenegger/nvim-dap" },
     build = "./install.sh",
     config = function()
-      require("vim-java-debugger").setup()
+      require("nvim-java-debugger").setup()
     end,
   },
 }
@@ -79,7 +79,7 @@ cd adapter
 ## Configuration
 
 ```lua
-require("vim-java-debugger").setup({
+require("nvim-java-debugger").setup({
   adapter_jar = nil,            -- auto-detected from plugin directory
   keymaps = true,               -- enable default keymaps
   keymap_prefix = "<leader>d",  -- prefix for keymaps
@@ -126,7 +126,7 @@ The plugin exposes a `status()` function for statusline integration:
 -- Example with lualine
 {
   function()
-    return require("vim-java-debugger.config").status()
+    return require("nvim-java-debugger.config").status()
   end,
   color = { fg = "#f38ba8", gui = "bold" },
 }
@@ -154,7 +154,7 @@ When you press `<leader>dc`, the plugin determines which class to launch:
 3. **Has saved record, current file is different and has `main`** — shows a selection popup (saved vs current). Your choice does **not** overwrite the saved record
 4. **Has saved record, current file has no `main`** — uses the saved record
 
-The main class is saved to `.vim-java-debugger/main_class` after a successful debug launch. Use `<leader>dm` to manually set or change it.
+The main class is saved to `.nvim-java-debugger/main_class` after a successful debug launch. Use `<leader>dm` to manually set or change it.
 
 ## How It Works
 
@@ -163,15 +163,15 @@ The main class is saved to `.vim-java-debugger/main_class` after a successful de
 3. The server uses Java Debug Interface (JDI) to connect to and control the target JVM
 4. For Maven/Gradle projects, the plugin compiles and resolves classpath automatically
 5. For single-file projects, the source is compiled with incremental builds
-6. Breakpoints are persisted to `.vim-java-debugger/breakpoints.json` in the project directory
+6. Breakpoints are persisted to `.nvim-java-debugger/breakpoints.json` in the project directory
 
 ## Project Structure
 
 ```
-vim-java-debugger/
+nvim-java-debugger/
 ├── adapter/               # Java DAP adapter (Gradle project)
 │   └── src/main/java/     # DapServer, JavaDebugger, etc.
-├── lua/vim-java-debugger/  # Neovim plugin (Lua)
+├── lua/nvim-java-debugger/  # Neovim plugin (Lua)
 │   ├── init.lua            # Plugin setup & DAP registration
 │   ├── config.lua          # Configuration & keymaps
 │   └── breakpoints.lua     # Breakpoint persistence

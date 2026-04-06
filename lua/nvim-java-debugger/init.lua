@@ -1,13 +1,13 @@
 local M = {}
 
-local config = require("vim-java-debugger.config")
+local config = require("nvim-java-debugger.config")
 
 function M.setup(opts)
   config.setup(opts)
 
   local ok, dap = pcall(require, "dap")
   if not ok then
-    vim.notify("vim-java-debugger: nvim-dap is required", vim.log.levels.ERROR)
+    vim.notify("nvim-java-debugger: nvim-dap is required", vim.log.levels.ERROR)
     return
   end
 
@@ -43,7 +43,7 @@ function M.setup(opts)
   end
 
   -- Breakpoint 持久化
-  local bp = require("vim-java-debugger.breakpoints")
+  local bp = require("nvim-java-debugger.breakpoints")
   bp.setup()
 end
 
