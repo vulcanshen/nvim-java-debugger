@@ -58,6 +58,9 @@ public class DapMessageHandler {
             case "configurationDone":
                 handleConfigurationDone(request);
                 break;
+            case "evaluate":
+                handleEvaluate(request);
+                break;
             default:
                 server.sendResponse(request, null);
                 break;
@@ -67,6 +70,7 @@ public class DapMessageHandler {
     private void handleInitialize(JsonObject request) {
         JsonObject capabilities = new JsonObject();
         capabilities.addProperty("supportsConfigurationDoneRequest", true);
+        capabilities.addProperty("supportsEvaluateForHovers", true);
         capabilities.addProperty("supportsSingleThreadExecutionRequests", true);
         server.sendResponse(request, capabilities);
         server.sendEvent("initialized", null);
@@ -175,6 +179,22 @@ public class DapMessageHandler {
         }
         server.sendResponse(request, null);
         System.exit(0);
+    }
+
+    private void handleEvaluate(JsonObject request) {
+        if (debugger != null) {
+            JsonObject args = request.getAsJsonObject("arguments");
+            String expression = args.get("expression").getAsString();
+            int frameId = args.has("frameId") ? args.get("frameId").getAsInt() : 0;
+            JsonObject body = debugger.evaluate(expression, frameId);
+            if (body != null) {
+                server.sendResponse(request, body);
+            } else {
+                server.sendErrorResponse(request, "Cannot evaluate: " + expression);
+            }
+        } else {
+            server.sendErrorResponse(request, "No active debug session");
+        }
     }
 
     private void handleConfigurationDone(JsonObject request) {

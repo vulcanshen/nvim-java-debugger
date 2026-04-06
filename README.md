@@ -118,6 +118,21 @@ When a debug session starts, simplified single-key keymaps are activated automat
 
 Original keymaps are restored when the session ends.
 
+## Watch Expressions
+
+The plugin supports evaluating expressions in the nvim-dap-ui Watch panel. Supported expressions:
+
+| Expression | Example | Description |
+|---|---|---|
+| Variable | `name` | Local variable or field value |
+| Field access | `obj.field` | Access object field |
+| Method call | `name.length()` | Call no-argument method |
+| Chained | `obj.field.method()` | Chain field access and method calls |
+| Array index | `arr[0]` | Access array element |
+| `this` | `this` | Current object reference |
+
+Complex expressions (arithmetic, multi-argument methods, lambdas, `new`) are not supported.
+
 ## Statusline Integration
 
 The plugin exposes a `status()` function for statusline integration:

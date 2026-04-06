@@ -34,6 +34,9 @@ public class JavaDebugger {
     private final Map<String, List<BreakpointRequest>> breakpoints = new HashMap<>();
     // 暫存尚未 verified 的斷點（class 還沒載入），等 ClassPrepareEvent 時再設
     private final Map<String, Map<Integer, String>> pendingBreakpoints = new HashMap<>();
+    // variablesReference → ObjectReference 的映射，用於展開物件
+    private final Map<Integer, ObjectReference> variableRefs = new HashMap<>();
+    private int nextVarRef = 1000; // 從 1000 開始，避免跟 frameId+1 衝突
 
     public JavaDebugger(DapServer server, String projectRoot, ProjectDetector.ProjectType projectType) {
         this.server = server;
@@ -330,6 +333,7 @@ public class JavaDebugger {
             if (terminated) return;
             BreakpointEvent bpEvent = (BreakpointEvent) event;
             stoppedThreadId = bpEvent.thread().uniqueID();
+            variableRefs.clear();
             JsonObject body = new JsonObject();
             body.addProperty("reason", "breakpoint");
             body.addProperty("threadId", stoppedThreadId);
@@ -340,6 +344,7 @@ public class JavaDebugger {
             StepEvent stepEvent = (StepEvent) event;
             vm.eventRequestManager().deleteEventRequest(event.request());
             stoppedThreadId = stepEvent.thread().uniqueID();
+            variableRefs.clear();
             JsonObject body = new JsonObject();
             body.addProperty("reason", "step");
             body.addProperty("threadId", stoppedThreadId);
@@ -484,22 +489,46 @@ public class JavaDebugger {
 
     public JsonObject getVariables(JsonObject args) {
         int variablesReference = args.get("variablesReference").getAsInt();
-        int frameId = variablesReference - 1;
         JsonArray variables = new JsonArray();
 
         try {
-            ThreadReference thread = findThread(stoppedThreadId);
-            if (thread != null && thread.isSuspended() && thread.frameCount() > frameId) {
-                StackFrame frame = thread.frame(frameId);
-                List<LocalVariable> visibleVars = frame.visibleVariables();
-                for (LocalVariable var : visibleVars) {
-                    Value value = frame.getValue(var);
-                    JsonObject v = new JsonObject();
-                    v.addProperty("name", var.name());
-                    v.addProperty("value", value != null ? value.toString() : "null");
-                    v.addProperty("type", var.typeName());
-                    v.addProperty("variablesReference", 0);
-                    variables.add(v);
+            // 檢查是否是展開物件的請求
+            ObjectReference objRef = variableRefs.get(variablesReference);
+            if (objRef instanceof ArrayReference) {
+                // 展開陣列元素
+                ArrayReference arr = (ArrayReference) objRef;
+                for (int i = 0; i < arr.length(); i++) {
+                    Value element = arr.getValue(i);
+                    String elemType = element != null ? element.type().name() : "null";
+                    variables.add(buildVariable("[" + i + "]", elemType, element));
+                }
+            } else if (objRef != null) {
+                // 展開物件的 fields
+                ReferenceType refType = objRef.referenceType();
+                for (Field field : refType.allFields()) {
+                    Value value = objRef.getValue(field);
+                    variables.add(buildVariable(field.name(), field.typeName(), value));
+                }
+            } else {
+                // 展開 stack frame 的區域變數
+                int frameId = variablesReference - 1;
+                ThreadReference thread = findThread(stoppedThreadId);
+                if (thread != null && thread.isSuspended() && thread.frameCount() > frameId) {
+                    StackFrame frame = thread.frame(frameId);
+                    // this 參考（非 static 方法）
+                    try {
+                        ObjectReference thisObj = frame.thisObject();
+                        if (thisObj != null) {
+                            variables.add(buildVariable("this", thisObj.referenceType().name(), thisObj));
+                        }
+                    } catch (Exception e) {
+                        // static method, no this
+                    }
+                    List<LocalVariable> visibleVars = frame.visibleVariables();
+                    for (LocalVariable var : visibleVars) {
+                        Value value = frame.getValue(var);
+                        variables.add(buildVariable(var.name(), var.typeName(), value));
+                    }
                 }
             }
         } catch (Exception e) {
@@ -509,6 +538,197 @@ public class JavaDebugger {
         JsonObject body = new JsonObject();
         body.add("variables", variables);
         return body;
+    }
+
+    private JsonObject buildVariable(String name, String typeName, Value value) {
+        JsonObject v = new JsonObject();
+        v.addProperty("name", name);
+        v.addProperty("type", typeName);
+
+        if (value == null) {
+            v.addProperty("value", "null");
+            v.addProperty("variablesReference", 0);
+        } else if (value instanceof StringReference) {
+            v.addProperty("value", "\"" + ((StringReference) value).value() + "\"");
+            v.addProperty("variablesReference", 0);
+        } else if (value instanceof ArrayReference) {
+            ArrayReference arr = (ArrayReference) value;
+            int ref = nextVarRef++;
+            variableRefs.put(ref, arr);
+            v.addProperty("value", typeName + "[" + arr.length() + "]");
+            v.addProperty("variablesReference", ref);
+        } else if (value instanceof ObjectReference) {
+            ObjectReference obj = (ObjectReference) value;
+            int ref = nextVarRef++;
+            variableRefs.put(ref, obj);
+            // 嘗試用 toString() 顯示值
+            String display;
+            try {
+                ThreadReference thread = findThread(stoppedThreadId);
+                if (thread != null) {
+                    Value toStr = obj.invokeMethod(thread, obj.referenceType()
+                        .methodsByName("toString").get(0), java.util.Collections.emptyList(), 0);
+                    display = toStr != null ? ((StringReference) toStr).value() : obj.type().name();
+                } else {
+                    display = obj.type().name();
+                }
+            } catch (Exception e) {
+                display = obj.type().name();
+            }
+            v.addProperty("value", display);
+            v.addProperty("variablesReference", ref);
+        } else {
+            // primitive types
+            v.addProperty("value", value.toString());
+            v.addProperty("variablesReference", 0);
+        }
+
+        return v;
+    }
+
+    public JsonObject evaluate(String expression, int frameId) {
+        try {
+            ThreadReference thread = findThread(stoppedThreadId);
+            if (thread == null || !thread.isSuspended()) return null;
+            if (thread.frameCount() <= frameId) return null;
+
+            StackFrame frame = thread.frame(frameId);
+            Value result = evaluateExpression(expression, frame, thread);
+
+            if (result == null && expression.matches("[a-zA-Z_]\\w*")) {
+                // 可能是 null 值的變數
+                JsonObject body = new JsonObject();
+                body.addProperty("result", "null");
+                body.addProperty("variablesReference", 0);
+                return body;
+            }
+
+            if (result != null) {
+                JsonObject var = buildVariable("result", result.type().name(), result);
+                JsonObject body = new JsonObject();
+                body.addProperty("result", var.get("value").getAsString());
+                body.addProperty("type", var.get("type").getAsString());
+                body.addProperty("variablesReference", var.get("variablesReference").getAsInt());
+                return body;
+            }
+        } catch (Exception e) {
+            System.err.println("Evaluate failed: " + e.getMessage());
+        }
+        return null;
+    }
+
+    private Value evaluateExpression(String expression, StackFrame frame, ThreadReference thread) throws Exception {
+        // 分解表達式：name.length() 或 obj.field.method() 或 arr[0]
+        String[] parts = splitExpression(expression);
+
+        // 第一部分：取得根變數
+        Value current = resolveRoot(parts[0], frame);
+        if (current == null) return null;
+
+        // 依序解析後續部分
+        for (int i = 1; i < parts.length; i++) {
+            if (current == null) return null;
+            current = resolveChain(parts[i], current, thread);
+        }
+
+        return current;
+    }
+
+    private String[] splitExpression(String expression) {
+        // 用 . 分割，但保留 () 和 []
+        // "name.length()" → ["name", "length()"]
+        // "arr[0]" → ["arr[0]"]
+        // "obj.field.method()" → ["obj", "field", "method()"]
+        List<String> parts = new ArrayList<>();
+        StringBuilder sb = new StringBuilder();
+        int depth = 0;
+        for (char c : expression.toCharArray()) {
+            if (c == '(' || c == '[') depth++;
+            if (c == ')' || c == ']') depth--;
+            if (c == '.' && depth == 0) {
+                if (sb.length() > 0) parts.add(sb.toString());
+                sb.setLength(0);
+            } else {
+                sb.append(c);
+            }
+        }
+        if (sb.length() > 0) parts.add(sb.toString());
+        return parts.toArray(new String[0]);
+    }
+
+    private Value resolveRoot(String name, StackFrame frame) throws Exception {
+        // 檢查陣列索引: arr[0]
+        if (name.matches("\\w+\\[\\d+]")) {
+            String varName = name.substring(0, name.indexOf('['));
+            int index = Integer.parseInt(name.substring(name.indexOf('[') + 1, name.indexOf(']')));
+            Value arrVal = findLocalVar(varName, frame);
+            if (arrVal instanceof ArrayReference) {
+                return ((ArrayReference) arrVal).getValue(index);
+            }
+            return null;
+        }
+
+        // this
+        if ("this".equals(name)) {
+            return frame.thisObject();
+        }
+
+        // 區域變數
+        return findLocalVar(name, frame);
+    }
+
+    private Value findLocalVar(String name, StackFrame frame) throws Exception {
+        try {
+            LocalVariable var = frame.visibleVariableByName(name);
+            if (var != null) {
+                return frame.getValue(var);
+            }
+        } catch (AbsentInformationException e) {
+            // ignore
+        }
+        // 嘗試 this 的 field
+        ObjectReference thisObj = frame.thisObject();
+        if (thisObj != null) {
+            Field field = thisObj.referenceType().fieldByName(name);
+            if (field != null) {
+                return thisObj.getValue(field);
+            }
+        }
+        return null;
+    }
+
+    private Value resolveChain(String part, Value current, ThreadReference thread) throws Exception {
+        if (!(current instanceof ObjectReference)) return null;
+        ObjectReference obj = (ObjectReference) current;
+
+        // 方法呼叫: method()
+        if (part.endsWith("()")) {
+            String methodName = part.substring(0, part.length() - 2);
+            List<Method> methods = obj.referenceType().methodsByName(methodName);
+            if (!methods.isEmpty()) {
+                // 找無參數的方法
+                for (Method m : methods) {
+                    if (m.argumentTypeNames().isEmpty()) {
+                        return obj.invokeMethod(thread, m, java.util.Collections.emptyList(), 0);
+                    }
+                }
+            }
+            return null;
+        }
+
+        // 陣列索引: [0]
+        if (part.matches("\\[\\d+]") && current instanceof ArrayReference) {
+            int index = Integer.parseInt(part.substring(1, part.length() - 1));
+            return ((ArrayReference) current).getValue(index);
+        }
+
+        // field 存取
+        Field field = obj.referenceType().fieldByName(part);
+        if (field != null) {
+            return obj.getValue(field);
+        }
+
+        return null;
     }
 
     public void configurationDone() {
